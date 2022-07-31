@@ -1,17 +1,18 @@
-from email.policy import default
 import os
 from datetime import datetime
-from tabnanny import check
 from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, DateTime, ARRAY, Float
+from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from werkzeug.security import generate_password_hash, check_password_hash
 
-database_username = os.environ.get('DB_USERNAME')
-database_password = os.environ.get('DB_PASSWORD')
-database_name = 'trivia'
+database_username = os.environ.get('DB_USERNAME', 'postgres')
+database_password = os.environ.get('DB_PASSWORD', 'password')
+database_name = 'roomee'
 database_path = 'postgresql://{}:{}@{}/{}'.format(database_username, database_password, 'localhost:5432', database_name)
 
 db = SQLAlchemy()
+
 
 """
 DATABASE INITIATION
@@ -19,18 +20,33 @@ DATABASE INITIATION
 def setup_db(app, database_path=database_path):
     app.config["SQLALCHEMY_DATABASE_URI"] = database_path
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.secret_key = os.environ.get('SECRET_KEY')
+    app.secret_key = os.environ.get('SECRET_KEY', 'secret') #TODO :remove secret
     db.app = app
     db.init_app(app)
     db.create_all()
     migrate = Migrate(app, db)
 
 
+class CRUDMixin(object):
+    __table_args__ = {'extend_existing': True}
+
+    def insert(self):
+        db.session.add(self)
+        db.session.commit()
+
+    def update(self):
+        db.session.commit()
+
+    def delete(self):
+        db.session.delete(self)
+        db.session.commit()
+
+
 
 """
 User Model
 """
-class User(db.Model):
+class User(CRUDMixin, db.Model):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
     first_name = Column(String, nullable=False)
@@ -39,12 +55,12 @@ class User(db.Model):
     address = Column(String, nullable=False)
     email = Column(String, nullable=False)
     password = Column(String, nullable=False)
-    hotel_id = Column(Integer, ForeignKey('hotel.id'))
-    role_id = Column(Integer, ForeignKey('role.id'))
+    hotel_id = Column(Integer, ForeignKey('hotels.id'), nullable=True)
+    role_id = Column(Integer, ForeignKey('roles.id'), nullable=True)
     approved = Column(Boolean, default=False)
     approve_time = Column(DateTime)
     create_time = Column(DateTime)
-    checkins = db.relationship('CheckIn', backref='rooms', lazy='dynamic')
+    checkins = db.relationship('CheckIn', backref='staff', lazy='dynamic')
 
     def __init__(self, first_name, last_name, phone_num, address, email, password, hotel_id, role_id):
         self.first_name = first_name
@@ -57,15 +73,17 @@ class User(db.Model):
         self.role_id = role_id
         self.create_time = datetime.now()
 
+    def hash_password(self, password):
+        """  Hash user password. """
+        self.password = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
+
+    def check_password(self, password):
+        """verify password"""
+        return check_password_hash(self.password, password)
+
     def insert(self):
+        self.password = generate_password_hash(self.password)
         db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
         db.session.commit()
     
     def __repr__(self):
@@ -86,7 +104,7 @@ class User(db.Model):
 """
 Client Model
 """
-class Client(db.Model):
+class Client(CRUDMixin, db.Model):
     __tablename__ = 'clients'
     id = Column(Integer, primary_key=True)
     first_name = Column(String, nullable=False)
@@ -111,17 +129,6 @@ class Client(db.Model):
         self.identity_pic = identity_pic
         self.create_time = datetime.now()
 
-    def insert(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
-        db.session.commit()
-
     def __repr__(self):
         return f'<Client "{self.first_name + self.last_name}">'
 
@@ -143,7 +150,7 @@ class Client(db.Model):
 """
 Hotel Model
 """
-class Hotel(db.Model):
+class Hotel(CRUDMixin, db.Model):
     __tablename__ = 'hotels'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
@@ -151,9 +158,10 @@ class Hotel(db.Model):
     address = Column(String, nullable=False)
     email = Column(String)
     website = Column(String)
-    room_prefixes = Column(ARRAY(String))
+    room_prefixes = Column(String) #TODO : change to array
     users = db.relationship('User', backref='hotel', lazy='dynamic')
     rooms = db.relationship('Room', backref='hotel', lazy='dynamic' )
+    checkins = db.relationship('CheckIn', backref='checkin_hotel', lazy='dynamic')
     create_time = Column(DateTime)
 
     def __init__(self, name, phone_num, address, email, website='', room_prefix=[]):
@@ -164,17 +172,6 @@ class Hotel(db.Model):
         self.website = website
         self.room_prefix = room_prefix
         self.create_time = datetime.now()
-
-    def insert(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
-        db.session.commit()
 
     def __repr__(self):
         return f'<Hotel "{self.name}...">'
@@ -195,18 +192,18 @@ class Hotel(db.Model):
 """
 Room Model
 """
-class Room(db.Model):
+class Room(CRUDMixin, db.Model):
     __tablename__ = 'rooms'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     location = Column(String, nullable = False)
-    amenities = Column(ARRAY(String))
-    pictures = Column(ARRAY(String))
+    amenities = Column(String) #TODO :change to array
+    pictures = Column(String) #TODO :change to array
     hotel_id = Column(Integer, ForeignKey('hotels.id'))
-    checkins = db.relationship('CheckIn', backref='rooms', lazy='dynamic')
+    checkins = db.relationship('CheckIn', backref='checkin_room', lazy='dynamic')
     price = Column(Float)
     occupied = Column(Boolean, default=False)
-    last_update = Column(DateTime)
+    last_update = Column(DateTime, onupdate=datetime.now())
     create_time = Column(DateTime)
 
 
@@ -218,16 +215,6 @@ class Room(db.Model):
         self.price = price
         self.create_time = datetime.now()
 
-    def insert(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
-        db.session.commit()
 
     def __repr__(self):
         return f'<Room "{self.name}...">'
@@ -246,32 +233,21 @@ class Room(db.Model):
 """
 Checkin Model
 """
-class CheckIn(db.Model):
+class CheckIn(CRUDMixin, db.Model):
     __tablename__ = 'checkins'
     id = Column(Integer, primary_key=True)
-    room_id = Column(Integer, ForeignKey('room.id'))
-    checked_in_by_id = Column(Integer, ForeignKey('user.id'))
-    client_id = Column(Integer, ForeignKey('client.id'))
+    room_id = Column(Integer, ForeignKey('rooms.id'))
+    checked_in_by_id = Column(Integer, ForeignKey('users.id'))
+    client_id = Column(Integer, ForeignKey('clients.id'))
+    hotel_id = Column(Integer, ForeignKey('hotels.id'))
     checkout = db.relationship('CheckOut', backref='checkin', uselist=False)
     create_time = Column(DateTime)
-
 
     def __init__(self, room_id, checked_in_by_id, client_id):
         self.room_id = room_id
         self.checked_in_by_id = checked_in_by_id
         self.client_id = client_id
         self.create_time = datetime.now()
-
-    def insert(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
-        db.session.commit()
 
     def __repr__(self):
         return f'<Check "{self.id}...">'
@@ -289,29 +265,17 @@ class CheckIn(db.Model):
 """
 Checkout Model
 """
-class CheckOut(db.Model):
+class CheckOut(CRUDMixin, db.Model):
     __tablename__ = 'checkouts'
     id = Column(Integer, primary_key=True)
-    checked_out_by_id = Column(Integer, ForeignKey('user.id'))
-    checkin_id = Column(Integer, ForeignKey('checkin.id'))
+    checked_out_by_id = Column(Integer, ForeignKey('users.id'))
+    checkin_id = Column(Integer, ForeignKey('checkins.id'))
     create_time = Column(DateTime)
-
 
     def __init__(self, checked_out_by_id, checkin_id):
         self.checked_out_by_id = checked_out_by_id
         self.checkin_id = checkin_id
         self.create_time = datetime.now()
-
-    def insert(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
-        db.session.commit()
 
     def __repr__(self):
         return f'<Check "{self.id}...">'
@@ -329,25 +293,13 @@ class CheckOut(db.Model):
 """
 Role Model
 """
-class Role(db.Model):
+class Role(CRUDMixin, db.Model):
     __tablename__ = 'roles'
     id = Column(Integer, primary_key=True)
     name = Column(String)
 
-
     def __init__(self, name):
         self.name = name
-
-    def insert(self):
-        db.session.add(self)
-        db.session.commit()
-
-    def update(self):
-        db.session.commit()
-
-    def delete(self):
-        db.session.delete(self)
-        db.session.commit()
 
     def __repr__(self):
         return f'<Role "{self.id}...">'
@@ -357,3 +309,4 @@ class Role(db.Model):
             'id': self.id,
             'name': self.name
             }
+
